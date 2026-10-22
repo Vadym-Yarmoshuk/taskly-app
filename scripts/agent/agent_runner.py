@@ -412,7 +412,7 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=ROOT / ".agent")
     parser.add_argument(
         "--models", nargs="+",
-        default=os.getenv("AGENT_MODELS", "gemini-3.6-flash gemini-3.8-flash gemini-3.5-flash gemini-3.5-flash-lite").split(),
+        default=os.getenv("AGENT_MODELS", "gemini-3-flash-preview gemini-3.6-flash gemini-3.8-flash gemini-3.5-flash gemini-3.5-flash-lite gemini-3.1-flash-lite").split(),
     )
     return run(parser.parse_args())
 
