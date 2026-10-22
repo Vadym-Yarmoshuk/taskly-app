@@ -1,6 +1,7 @@
+from datetime import date
 import pytest
 
-from app.features.todos.schemas import TodoCreate
+from app.features.todos.schemas import TodoCreate, TodoStats
 
 
 def test_list_returns_tasks_from_repository(client, repository_mock, todo):
@@ -9,6 +10,15 @@ def test_list_returns_tasks_from_repository(client, repository_mock, todo):
     assert response.status_code == 200
     assert response.json() == [todo.model_dump(mode="json")]
     repository_mock.list.assert_called_once_with()
+
+
+def test_stats_returns_summary_from_repository(client, repository_mock):
+    stats = TodoStats(total=5, active=3, completed=2, overdue=1)
+    repository_mock.stats.return_value = stats
+    response = client.get("/api/todos/stats")
+    assert response.status_code == 200
+    assert response.json() == stats.model_dump(mode="json")
+    repository_mock.stats.assert_called_once_with(date.today())
 
 
 def test_create_trims_input_and_returns_created_task(client, repository_mock, todo):

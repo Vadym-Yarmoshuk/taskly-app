@@ -25,9 +25,10 @@ function setup() {
 }
 
 describe('useDeleteTodoMutation', () => {
-  it('removes only the deleted todo from the list cache', async () => {
+  it('removes only the deleted todo from the list cache and invalidates stats', async () => {
     vi.mocked(todosApi.remove).mockResolvedValue(undefined)
     const { client, wrapper } = setup()
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries')
 
     const other = { ...todoFixture, id: 8 }
     client.setQueryData(todoKeys.list, [todoFixture, other])
@@ -40,5 +41,6 @@ describe('useDeleteTodoMutation', () => {
 
     expect(todosApi.remove).toHaveBeenCalledWith(todoFixture.id)
     expect(client.getQueryData(todoKeys.list)).toEqual([other])
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoKeys.stats })
   })
 })

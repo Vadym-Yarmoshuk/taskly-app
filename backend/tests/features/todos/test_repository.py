@@ -1,11 +1,12 @@
+from datetime import date
 from unittest.mock import Mock
 
-from sqlalchemy import select
-from sqlalchemy.dialects import postgresql
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.features.todos.models import TodoRecord
 from app.features.todos.repository import TodoRepository
+from app.features.todos.schemas import TodoStats
 
 
 def test_list_maps_models_and_orders_tasks_newest_first(model_factory, todo_values, todo):
@@ -15,8 +16,26 @@ def test_list_maps_models_and_orders_tasks_newest_first(model_factory, todo_valu
     statement = session.scalars.call_args.args[0]
     expected = select(TodoRecord).order_by(TodoRecord.created_at.desc(), TodoRecord.id.desc())
     assert statement.compare(expected)
-    compiled = str(statement.compile(dialect=postgresql.dialect()))
-    assert "ORDER BY todos.created_at DESC, todos.id DESC" in compiled
+
+
+def test_stats_calculates_counts_from_database(todo_values):
+    session = Mock(spec=Session)
+    session.execute.return_value.one.return_value = (10, 4, 2)
+    today = date(2026, 10, 20)
+    
+    stats = TodoRepository(session).stats(today)
+    
+    assert stats == TodoStats(total=10, active=6, completed=4, overdue=2)
+    statement = session.execute.call_args.args[0]
+    # We check that the statement selects the expected counts.
+    # overdue = ~TodoRecord.completed & (TodoRecord.due_date < today)
+    overdue_filter = ~TodoRecord.completed & (TodoRecord.due_date < today)
+    expected = select(
+        func.count(TodoRecord.id),
+        func.count(TodoRecord.id).filter(TodoRecord.completed),
+        func.count(TodoRecord.id).filter(overdue_filter),
+    )
+    assert statement.compare(expected)
 
 
 def test_get_returns_none_for_missing_task():

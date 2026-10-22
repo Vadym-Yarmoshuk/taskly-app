@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import { useNotice } from '../../hooks/useNotice'
 import { useTodoFilters } from './hooks/useTodoFilters'
+import { useTodoStats } from './hooks/useTodoStats'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
 import { useUpdateTodoMutation } from './hooks/useUpdateTodoMutation'
@@ -11,6 +12,7 @@ import { TodosPage } from './TodosPage'
 vi.mock('../../design-system', () => import('../../design-system/mocks'))
 vi.mock('../../hooks/useNotice', () => ({ useNotice: vi.fn() }))
 vi.mock('./hooks/useTodoFilters', () => ({ useTodoFilters: vi.fn() }))
+vi.mock('./hooks/useTodoStats', () => ({ useTodoStats: vi.fn() }))
 vi.mock('./hooks/useTodosBusy', () => ({ useTodosBusy: vi.fn() }))
 vi.mock('./hooks/useTodosQuery', () => ({ useTodosQuery: vi.fn() }))
 vi.mock('./hooks/useUpdateTodoMutation', () => ({
@@ -26,6 +28,9 @@ vi.mock('./components/DeleteTodoDialog', () => ({
   DeleteTodoDialog: () => null,
 }))
 vi.mock('../../components/SuccessNotice', () => ({ SuccessNotice: () => null }))
+vi.mock('./components/TodoStatsSummary', () => ({
+  TodoStatsSummary: () => <div data-testid="stats-summary" />,
+}))
 
 it('displays a query failure and resets mutation errors before retrying', async () => {
   const user = userEvent.setup()
@@ -39,6 +44,9 @@ it('displays a query failure and resets mutation errors before retrying', async 
     error: new Error('The server is unavailable.'),
     refetch,
   } as unknown as ReturnType<typeof useTodosQuery>)
+  vi.mocked(useTodoStats).mockReturnValue({
+    data: undefined,
+  } as unknown as ReturnType<typeof useTodoStats>)
   vi.mocked(useUpdateTodoMutation).mockReturnValue({
     error: null,
     reset,

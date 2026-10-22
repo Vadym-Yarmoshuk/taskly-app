@@ -26,10 +26,11 @@ function setup() {
 }
 
 describe('useCreateTodoMutation', () => {
-  it('creates a todo and prepends it to the list cache', async () => {
+  it('creates a todo, prepends it to the list cache, and invalidates stats', async () => {
     const newTodo = { ...todoFixture, id: 8, title: 'New Todo' }
     vi.mocked(todosApi.create).mockResolvedValue(newTodo)
     const { client, wrapper } = setup()
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries')
 
     const existingTodos: Todo[] = [todoFixture]
     client.setQueryData(todoKeys.list, existingTodos)
@@ -51,6 +52,7 @@ describe('useCreateTodoMutation', () => {
       newTodo,
       ...existingTodos,
     ])
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoKeys.stats })
   })
 
   it('handles empty cache by creating a new list', async () => {
