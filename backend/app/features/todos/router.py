@@ -1,9 +1,10 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Response
 
 from ...api.dependencies import Repository
-from .schemas import Todo, TodoCreate, TodoUpdate
+from .schemas import Todo, TodoCreate, TodoStats, TodoUpdate
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 TodoId = Annotated[int, Path(gt=0)]
@@ -17,6 +18,11 @@ def list_todos(repo: Repository):
 @router.post("", response_model=Todo, status_code=201)
 def create_todo(payload: TodoCreate, repo: Repository):
     return repo.create(payload)
+
+
+@router.get("/stats", response_model=TodoStats)
+def todo_stats(repo: Repository):
+    return repo.stats(date.today())
 
 
 @router.get("/{todo_id}", response_model=Todo)

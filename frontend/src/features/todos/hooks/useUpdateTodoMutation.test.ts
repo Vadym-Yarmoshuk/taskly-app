@@ -25,10 +25,11 @@ function setup() {
 }
 
 describe('useUpdateTodoMutation', () => {
-  it('replaces only the updated todo in the list cache', async () => {
+  it('replaces only the updated todo in the list cache and invalidates stats', async () => {
     const updatedTodo = { ...todoFixture, title: 'Updated Title' }
     vi.mocked(todosApi.update).mockResolvedValue(updatedTodo)
     const { client, wrapper } = setup()
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries')
 
     const other = { ...todoFixture, id: 8 }
     client.setQueryData(todoKeys.list, [todoFixture, other])
@@ -46,5 +47,6 @@ describe('useUpdateTodoMutation', () => {
       title: 'Updated Title',
     })
     expect(client.getQueryData(todoKeys.list)).toEqual([updatedTodo, other])
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoKeys.stats })
   })
 })
