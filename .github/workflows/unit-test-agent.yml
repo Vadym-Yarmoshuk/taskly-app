@@ -1,0 +1,262 @@
+# Creates or updates unit tests for code changed in a pull request.
+#
+# prepare  - finds testable changes (no secrets, read-only)
+# generate - runs the unit test agent; tests run in a network-less container
+# verify   - applies the accepted test patch and runs both suites (no secrets)
+# publish  - commits verified tests to the PR branch and updates one PR comment
+name: Unit test agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "backend/app/**"
+      - "frontend/src/**"
+
+permissions: {}
+
+concurrency:
+  group: unit-test-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  HEAD_REF: ${{ github.event.pull_request.head.ref }}
+  HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+  PYTHON_IMAGE: python:3.13-slim
+  NODE_IMAGE: node:22-slim
+
+jobs:
+  prepare:
+    name: Analyze changes
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      has_testable_changes: ${{ steps.collect.outputs.has_testable_changes }}
+      same_repo: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load trusted agent scripts from the base commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/trusted"
+          git archive "$BASE_SHA" .gemini scripts/agent | tar -x -C "$RUNNER_TEMP/trusted"
+      - name: Collect changes
+        id: collect
+        run: python3 "$RUNNER_TEMP/trusted/scripts/agent/collect_changes.py" --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Summary
+        run: |
+          {
+            echo "### Unit test agent: change analysis"
+            echo
+            sed -n '/^| File/,/^$/p' .agent/context.md
+            if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+              echo
+              echo "Pull requests from forks do not get secrets, so the agent does not run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-context
+          path: .agent/context.*
+          include-hidden-files: true
+          retention-days: 7
+
+  generate:
+    name: Generate tests
+    needs: prepare
+    if: needs.prepare.outputs.has_testable_changes == 'true' && needs.prepare.outputs.same_repo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.agent.outputs.outcome || 'error' }}
+      model: ${{ steps.agent.outputs.model || 'none' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load trusted agent definition, skills and scripts from the base commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/trusted"
+          git archive "$BASE_SHA" .gemini scripts/agent | tar -x -C "$RUNNER_TEMP/trusted"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-context
+          path: .agent
+      - name: Install dependencies inside the test containers
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/work" -w /work/backend \
+            "$PYTHON_IMAGE" sh -c 'python -m venv .venv && .venv/bin/pip install -q -r requirements.txt'
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/work" -w /work/frontend \
+            "$NODE_IMAGE" npm ci --no-audit --no-fund
+      - name: Run unit test agent
+        id: agent
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AGENT_MODELS: ${{ vars.AGENT_MODELS || 'gemini-3.6-flash gemini-3.8-flash gemini-3.5-flash gemini-3.5-flash-lite' }}
+          AGENT_REPO_ROOT: ${{ github.workspace }}
+          AGENT_TEST_SANDBOX: docker
+          AGENT_PYTHON_IMAGE: ${{ env.PYTHON_IMAGE }}
+          AGENT_NODE_IMAGE: ${{ env.NODE_IMAGE }}
+        run: |
+          python3 "$RUNNER_TEMP/trusted/scripts/agent/agent_runner.py" \
+            --agent "$RUNNER_TEMP/trusted/.gemini/agents/unit-test-agent.md" \
+            --skills "$RUNNER_TEMP/trusted/.gemini/skills" \
+            --context .agent/context.md --out-dir .agent
+      - name: Format frontend test files
+        run: |
+          git status --porcelain --untracked-files=all | cut -c4- \
+            | grep -E '^frontend/src/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.test\.tsx?$' | sed 's|^frontend/||' \
+            | xargs -r docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work/frontend \
+              "$NODE_IMAGE" node_modules/.bin/prettier --write
+      - name: Accept only test file changes
+        run: python3 "$RUNNER_TEMP/trusted/scripts/agent/guard_changes.py" --revert
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: agent-result
+          path: |
+            .agent/report.json
+            .agent/agent-run.json
+            .agent/guard.json
+            .agent/tests.patch
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  verify:
+    name: Verify tests
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      passed: ${{ steps.after.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load trusted scripts from the base commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/trusted"
+          git archive "$BASE_SHA" scripts/agent | tar -x -C "$RUNNER_TEMP/trusted"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-result
+          path: .agent
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: |
+          python -m pip install -q -r backend/requirements.txt
+          npm ci --prefix frontend --no-audit --no-fund
+      - name: Run tests before the agent changes
+        continue-on-error: true
+        env:
+          AGENT_REPO_ROOT: ${{ github.workspace }}
+        run: python "$RUNNER_TEMP/trusted/scripts/agent/verify_tests.py" --stage before
+      - name: Apply the accepted test patch
+        run: |
+          if [ -s .agent/tests.patch ]; then git apply --index .agent/tests.patch; fi
+      - name: Run tests after the agent changes
+        id: after
+        continue-on-error: true
+        env:
+          AGENT_REPO_ROOT: ${{ github.workspace }}
+        run: python "$RUNNER_TEMP/trusted/scripts/agent/verify_tests.py" --stage after
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: verify-result
+          path: .agent/verify.json
+          include-hidden-files: true
+          retention-days: 7
+
+  publish:
+    name: Publish results
+    needs: [generate, verify]
+    if: ${{ !cancelled() && needs.generate.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Load trusted scripts from the base commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/trusted"
+          git archive "$BASE_SHA" scripts/agent | tar -x -C "$RUNNER_TEMP/trusted"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: "{agent-result,verify-result}"
+          merge-multiple: true
+          path: .agent
+      - name: Commit verified tests to the pull request branch
+        id: commit
+        if: needs.verify.outputs.passed == 'true' && needs.generate.outputs.outcome == 'success'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MODEL: ${{ needs.generate.outputs.model }}
+        run: |
+          if [ ! -s .agent/tests.patch ]; then echo "No test changes."; exit 0; fi
+          if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            echo "The branch moved since this run started; a newer run will handle it."
+            exit 0
+          fi
+          git apply --index .agent/tests.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "test: add unit tests for changed code" \
+            -m "Generated by unit-test-agent ($MODEL) and verified in $RUN_URL"
+          git push origin "HEAD:refs/heads/$HEAD_REF"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+      - name: Render report
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUTCOME: ${{ needs.generate.outputs.outcome }}
+          MODEL: ${{ needs.generate.outputs.model }}
+          COMMITTED: ${{ steps.commit.outputs.committed }}
+        run: |
+          python3 "$RUNNER_TEMP/trusted/scripts/agent/render_report.py" \
+            --agent-outcome "$OUTCOME" --model "$MODEL" --sha "$HEAD_SHA" --run-url "$RUN_URL" \
+            $([ "$COMMITTED" = "true" ] && echo --committed) > /dev/null
+          cat .agent/comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Create or update the pull request comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- unit-test-agent-report -->")))][0].id // empty')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@.agent/comment.md > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@.agent/comment.md > /dev/null
+          fi

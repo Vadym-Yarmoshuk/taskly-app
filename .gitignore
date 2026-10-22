@@ -12,3 +12,7 @@ htmlcov/
 *.db-wal
 .env
 .DS_Store
+
+# Files
+assignment 2.md
+.agent/
