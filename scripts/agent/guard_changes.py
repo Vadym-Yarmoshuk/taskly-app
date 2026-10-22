@@ -16,6 +16,7 @@ ALLOWED = [
     re.compile(r"^frontend/src/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.test\.tsx?$"),
 ]
 IGNORED_PREFIXES = (".agent/",)
+ASSERTION = re.compile(r"^\s*(assert\b|expect\(|await expect\()")
 FORBIDDEN_CODE = re.compile(
     r"\b(it|test|describe)\.(skip|only|todo)\b"
     r"|\bx(it|describe)\("
@@ -45,6 +46,19 @@ def added_lines(status: str, path: str) -> str:
     return "\n".join(l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++"))
 
 
+def removed_assertions(status: str, path: str) -> list[str]:
+    """Return existing assertion lines that the change removes or rewrites."""
+    if status == "??":
+        return []
+    removed, added = [], set()
+    for line in git("diff", "HEAD", "--", path).splitlines():
+        if line.startswith("-") and not line.startswith("---") and ASSERTION.match(line[1:]):
+            removed.append(line[1:].strip())
+        elif line.startswith("+") and not line.startswith("+++"):
+            added.add(line[1:].strip())
+    return [line for line in removed if line not in added]
+
+
 def revert(status: str, path: str) -> None:
     """Restore a file to its committed state, or delete it if it is new."""
     if status == "??":
@@ -61,6 +75,8 @@ def review(status: str, path: str) -> str | None:
         return "deleting test files is not allowed"
     if FORBIDDEN_CODE.search(added_lines(status, path)):
         return "adds skipped, focused or expected-to-fail tests"
+    if removed := removed_assertions(status, path):
+        return f"removes existing assertions: {removed[0][:80]}"
     return None
 
 

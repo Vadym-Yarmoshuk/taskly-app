@@ -48,13 +48,15 @@ def coverage_row(suite: str, verify: dict) -> str:
     after = verify.get("after", {}).get(suite, {})
     status = "✅ passed" if after.get("passed") else "❌ failed"
 
-    def fmt(value):
-        return "n/a" if value is None else f"{value:.1f}%"
+    def fmt(result):
+        if result and not result.get("passed"):
+            return "❌ failed"
+        return "n/a" if result.get("coverage") is None else f"{result['coverage']:.1f}%"
 
     delta = ""
     if before.get("coverage") is not None and after.get("coverage") is not None:
         delta = f" ({after['coverage'] - before['coverage']:+.1f})"
-    return f"| {suite} | {status} | {fmt(before.get('coverage'))} | {fmt(after.get('coverage'))}{delta} |"
+    return f"| {suite} | {status} | {fmt(before)} | {fmt(after)}{delta} |"
 
 
 def render(args) -> str:

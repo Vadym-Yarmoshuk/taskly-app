@@ -30,7 +30,7 @@ env:
 jobs:
   prepare:
     name: Analyze changes
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

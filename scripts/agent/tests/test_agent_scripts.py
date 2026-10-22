@@ -161,3 +161,27 @@ def test_validate_reports_invalid_actions():
 def test_validate_accepts_a_complete_report():
     report = {"summary": "s", "decisions": [{"source": "a", "action": "skip"}], "test_runs": [], "findings": []}
     assert render_report.validate(report) == []
+
+
+def test_guard_detects_removed_assertions(monkeypatch):
+    diff = "\n".join([
+        "--- a/x",
+        "+++ b/x",
+        "-    assert result == 1",
+        "-    expect(a).toBe(1)",
+        "+    expect(a).toBe(1)",
+    ])
+    monkeypatch.setattr(guard_changes, "git", lambda *args: diff)
+    assert guard_changes.removed_assertions(" M", "x") == ["assert result == 1"]
+
+
+def test_guard_rejects_changes_that_remove_assertions(monkeypatch):
+    monkeypatch.setattr(guard_changes, "added_lines", lambda status, path: "")
+    monkeypatch.setattr(guard_changes, "removed_assertions", lambda status, path: ["assert compiled"])
+    assert guard_changes.review(" M", "backend/tests/test_x.py") == "removes existing assertions: assert compiled"
+
+
+def test_coverage_row_marks_failed_baseline():
+    verify = {"before": {"frontend": {"passed": False, "coverage": None}},
+              "after": {"frontend": {"passed": True, "coverage": 70.2}}}
+    assert render_report.coverage_row("frontend", verify) == "| frontend | ✅ passed | ❌ failed | 70.2% |"
