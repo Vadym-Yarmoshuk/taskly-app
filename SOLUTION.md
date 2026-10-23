@@ -158,12 +158,16 @@ was reviewed before commit; review changes are listed in the commit messages.
 | Suite | Before | After |
 |---|---|---|
 | backend (lines) | 42% | 68% |
-| frontend (lines) | 47.7% | 68.2% |
+| frontend (lines) | 47.7% | 73.5% |
+
+Every source file outside the coverage exclusions now has a unit test file.
+The numbers are measured on `main`; the demo PR adds more on top.
 
 Examples of review fixes: a config test loaded the real `.env` into the test
 process (now patched); the lifespan failure path (`dispose()` after a failed
 `initialize()`) was missing; cache tests did not prove that other tasks stay
-unchanged.
+unchanged; a custom-client test passed with any client; a sort test produced
+the same order before and after the change.
 
 ## Assumptions
 
@@ -190,8 +194,6 @@ unchanged.
 - **Model quality.** Fallback to "lite" models gives weaker tests. Human review
   remains necessary; the guard blocks only mechanical weakening (skips, removed
   assertions), not shallow tests.
-- **Coverage gap.** `AppProviders.tsx`, `TodoEmptyState.tsx` and
-  `useTodoFilters.ts` still have no tests; the quota was spent on the demo PR.
 - **Bot commits** with `GITHUB_TOKEN` need `workflow_dispatch` to get CI;
   GitHub may also list `pull_request` runs for the bot commit as "approval
   required". They are skipped by the workflow if approved.
